@@ -1,0 +1,43 @@
+﻿<!--
+Copyright (c) Microsoft Corporation. All rights reserved.
+Licensed under the MIT license.
+-->
+
+@model IEnumerable<Microsoft.Graph.Chat>
+
+@{
+  ViewBag.Current = "Chat";
+}
+
+<h1>Chats</h1>
+<table class="table">
+  <thead>
+    <tr>
+      <th scope="col">Id</th>
+      <th scope="col">Topic</th>
+      <th scope="col">Members</th>
+      <th scope="col">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    @foreach (var item in Model)
+    {
+      <tr>
+        <td>@item.Id</td>
+        <td>@item.Topic</td>
+        <td>
+          @foreach (var member in item.Members)
+          {
+            <span>@member.DisplayName</span>
+          }
+        </td>
+        <td>
+          <form action="/Chat/Export">
+            <input type="hidden" name="id" value="@item.Id" />
+            <input type="submit" name="action" value="Export" />  
+          </form>
+        </td>
+      </tr>
+    }
+  </tbody>
+</table>
