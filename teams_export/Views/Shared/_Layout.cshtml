@@ -4,9 +4,9 @@ Licensed under the MIT license.
 -->
 
 @{
-  var alerts = TempData.ContainsKey(graph_tutorial.Models.Alert.AlertKey)
-      ? (List<graph_tutorial.Models.Alert>)TempData[graph_tutorial.Models.Alert.AlertKey]
-      : new List<graph_tutorial.Models.Alert>();
+  var alerts = TempData.ContainsKey(teams_export.Models.Alert.AlertKey)
+      ? (List<teams_export.Models.Alert>)TempData[teams_export.Models.Alert.AlertKey]
+      : new List<teams_export.Models.Alert>();
 }
 
 <!DOCTYPE html>
@@ -26,35 +26,35 @@ Licensed under the MIT license.
 <body>
   <nav class="navbar navbar-expand-md navbar-dark fixed-top bg-dark">
     <div class="container">
-      @Html.ActionLink("ASP.NET Graph Tutorial", "Index", "Home", new { area = "" }, new { @class = "navbar-brand" })
+      @Html.ActionLink("Teams Chats Exporter", "Index", "Home", new { area = "" }, new { @class = "navbar-brand" })
       <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarCollapse"
               aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" id="navbarCollapse">
         <ul class="navbar-nav mr-auto">
-          <li class="nav-item">
+          <@*li class="nav-item">
             @Html.ActionLink("Home", "Index", "Home", new { area = "" },
-                new { @class = ViewBag.Current == "Home" ? "nav-link active" : "nav-link" })
+                                                        new { @class = ViewBag.Current == "Home" ? "nav-link active" : "nav-link" })
           </li>
           @if (Request.IsAuthenticated)
           {
             <li class="nav-item" data-turbolinks="false">
               @Html.ActionLink("Calendar", "Index", "Calendar", new { area = "" },
-                  new { @class = ViewBag.Current == "Calendar" ? "nav-link active" : "nav-link" })
+                                                          new { @class = ViewBag.Current == "Calendar" ? "nav-link active" : "nav-link" })
             </li>
             <li class="nav-item" data-turbolinks="false">
               @Html.ActionLink("Chat", "Index", "Chat", new { area = "" },
-                  new { @class = ViewBag.Current == "Chat" ? "nav-link active" : "nav-link" })
+                                                          new { @class = ViewBag.Current == "Chat" ? "nav-link active" : "nav-link" })
             </li>
-          }
+          }*@
         </ul>
         <ul class="navbar-nav justify-content-end" style="align-items:center;">
-          <li class="nav-item">
+          @*<li class="nav-item">
             <a class="nav-link" href="https://developer.microsoft.com/graph/docs/concepts/overview" target="_blank">
               <i class="fas fa-external-link-alt mr-1"></i>Docs
             </a>
-          </li>
+          </li>*@
           @if (Request.IsAuthenticated)
           {
             <li class="nav-item dropdown">
@@ -103,5 +103,20 @@ Licensed under the MIT license.
   @Scripts.Render("~/bundles/jquery")
   @Scripts.Render("~/bundles/bootstrap")
   @RenderSection("scripts", required: false)
+  <div class="ui-loader" style="display: none; backdrop-filter: blur(4px);">
+    <div class="ui-loader-relative">
+      <div class="ui-loader-position">
+        <div class="lds-dual-ring"></div>
+      </div>
+      <div class="ui-loader-message">
+      </div>
+    </div>
+  </div>
+  <script>
+    function ui_block() { $('.ui-loader').show(); }
+    function ui_block_backdrop(px) { $('.ui-loader').css('backdrop-filter', 'blur(' + px + 'px)'); }
+    function ui_unblock() { $('.ui-loader').hide(); }
+    function ui_message(message) { $('.ui-loader-message').html(message); }
+  </script>
 </body>
 </html>

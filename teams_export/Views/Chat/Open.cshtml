@@ -1,0 +1,189 @@
+﻿<!--
+Copyright (c) Microsoft Corporation. All rights reserved.
+Licensed under the MIT license.
+-->
+
+@model Microsoft.Graph.Chat
+
+@{
+  ViewBag.Current = "Chat";
+}
+
+<div class="card m-1">
+  <div class="card-body">
+
+    <h1>@(string.IsNullOrEmpty(Model.Topic) ? "Private Chat" : Model.Topic)</h1>
+    @foreach (var member in Model.Members)
+    {
+      <span class="btn btn-secondary m-1">@(member?.DisplayName.ToString())</span>
+    }
+  </div>
+</div>
+
+<div class="card m-1">
+  <div class="card-body">
+    <div class="container">
+      <div class="row">
+        <div class="col-4 text-center">
+          <span>Since: </span><span><input type="date" id="chat-since" value="@DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd")" /></span>
+        </div>
+        <div class="col-4 text-center">
+          <span>Until: </span><span><input type="date" id="chat-until" value="@DateTime.Now.ToString("yyyy-MM-dd")" /></span>
+        </div>
+        <div class="col-4 text-right">
+          <span class="btn btn-primary" data-type="load">Load</span>
+          <span class="btn btn-primary" data-type="export">Export</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card m-1" data-id="message-container" style="display: none">
+  <div class="card-body">
+    <div class="container" data-id="message-table" style="overflow: auto; max-height: calc(100vh - 400px)">
+
+    </div>
+  </div>
+</div>
+
+@section Scripts {
+  <script>
+  $(function () {
+
+      function uuidv4() {
+        return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c =>
+          (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+        );
+      }
+
+      var state = {
+        currentActionId: uuidv4(),
+        isComplete: false,
+        results: [],
+        members: {},
+        chat: @Html.Raw(Newtonsoft.Json.JsonConvert.SerializeObject(Model))
+      };
+
+      function renderMessage(message) {
+        if(message.Body.Content){
+          var row = $('<div class="row m-2"></div>');
+          var fromPrincipal = message.From.User.DisplayName == state.chat.members[0].displayName;
+          var style = ""; if(fromPrincipal) style = "background-color: rgb(232, 235, 250)";
+          var col = $('<div class="col-5 p-2 shadow" style="'+style+'"></div>');
+          var date = new Date(parseInt(message.CreatedDateTime.replace('/Date(','').replace(')/','')));
+          col.append($('<div><b>'+message.From.User.DisplayName+'</b> <span style="float: right; font-weight: light">'+date.toLocaleString()+'</span></div>'));
+          col.append($('<hr style="margin-top: 0px; margin-bottom: 2px;"/>'));
+          col.append($('<div>'+message.Body.Content+'</div>'));
+
+          if(fromPrincipal) row.append($('<div class="col-7"></div>'));
+          row.append(col);
+        }
+        return row;
+      }
+
+      function appendMessage(message) {
+        var body = $('[data-id="message-table"]');
+        body.prepend(renderMessage(message));
+        body.scrollTop(body[0].scrollHeight);
+        $('[data-id="message-container"]').show();
+      }
+
+      function getStatus() {
+        if (state.isComplete) return;
+        $.get({
+          url: "/Chat/Status?actionId=" + state.currentActionId,
+          success: function (result) {
+            ui_message(result);
+            setTimeout(getStatus, 100);
+          },
+          fail: function (result) {
+            setTimeout(getStatus, 100);
+          }
+        });
+      }
+
+      function getDelta(lastTime) {
+        if (!lastTime && state.isComplete) return;
+        $.get({
+          url: "/Chat/Delta?actionId=" + state.currentActionId,
+          success: function (result) {
+            for (var i = 0; i < result.length; i++) {
+              state.results.push(result[i]);
+              appendMessage(result[i]);
+            }
+            setTimeout(getDelta, 500);
+            if (state.isComplete) return;
+          },
+          fail: function (result) {
+            setTimeout(getDelta, 500);
+          }
+        });
+      }
+
+      function loadData() {
+        $('[data-id="message-container"]').hide();
+        $('[data-id="message-table"]').html('');
+
+        state.isComplete = false;
+        ui_block_backdrop(0);
+        ui_block();
+        getStatus();
+        getDelta();
+
+        $.get({
+          url: "/Chat/MessageList?actionId=" + state.currentActionId + "&chatId=@Model.Id&since=" + $("#chat-since").val() + "&until=" + $("#chat-until").val(),
+          success: function (result) {
+            state.isComplete = true;
+            state.results = result;
+            getDelta(true);
+            ui_unblock();
+          },
+          fail: function (result) {
+            state.isComplete = true;
+            ui_unblock();
+          },
+        });
+      }
+
+
+      $('[data-type="load"]').on('click', function() {
+        loadData();
+      }).trigger('click');
+
+      $('[data-type="export"]').on('click', function() {
+        var exportState = {
+          currentActionId: uuidv4(),
+          isComplete: false,
+        };
+        var url = "/Chat/Export?actionId=" + exportState.currentActionId + "&chatId=@Model.Id&since=" + $("#chat-since").val() + "&until=" + $("#chat-until").val()
+
+        function getExportStatus() {
+          if (exportState.isComplete) return;
+          $.get({
+            url: "/Chat/Status?actionId=" + exportState.currentActionId,
+            success: function (result) {
+              if(result === "Done") {
+                exportState.isComplete = true;
+                ui_unblock();
+              }
+              ui_message(result);
+              setTimeout(getExportStatus, 100);
+            },
+            fail: function (result) {
+              setTimeout(getExportStatus, 100);
+            }
+          });
+        }
+
+
+        var a = $('<iframe src="'+url+'" style="display: none" />');
+        $(document.body).append(a);
+
+        ui_block_backdrop(4);
+        ui_block();
+        getExportStatus();
+      });
+  });
+  </script>
+}

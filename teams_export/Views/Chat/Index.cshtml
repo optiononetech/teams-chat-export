@@ -19,25 +19,111 @@ Licensed under the MIT license.
       <th scope="col">Action</th>
     </tr>
   </thead>
-  <tbody>
-    @foreach (var item in Model)
-    {
-      <tr>
-        <td>@item.Id</td>
-        <td>@item.Topic</td>
-        <td>
-          @foreach (var member in item.Members)
-          {
-            <span>@member.DisplayName</span>
-          }
-        </td>
-        <td>
-          <form action="/Chat/Export">
-            <input type="hidden" name="id" value="@item.Id" />
-            <input type="submit" name="action" value="Export" />  
-          </form>
-        </td>
-      </tr>
-    }
+  <tbody data-id="chat-table">
   </tbody>
 </table>
+
+
+@section Scripts {
+  <script>
+    $(function () {
+
+      function uuidv4() {
+        return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c =>
+          (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+        );
+      }
+      var state = {
+        currentActionId: uuidv4(),
+        isComplete: false,
+        results: [],
+        members: {}
+      };
+
+      function renderChats() {
+        var rows = [];
+        for (var i = 0; i < state.results.length; i++) {
+          var result = state.results[i];
+          var tr = $('<tr data-id="' + result.Id + '"></tr>');
+          tr.append('<td>' + result.Id + '</td>');
+          tr.append('<td>' + (result.Topic || '<b>Private Chat</b>') + '</td>');
+          var members = $('<td data-type="members"></td>');
+          (function (id, members) {
+
+            if (!state.members[result.Id]) {
+              state.members[result.Id] = 'loading';
+              $.get({
+                url: "/Chat/MemberList?id=" + id,
+                success: function (result) {
+                  var text = "";
+                  for (var j = 0; j < result.length; j++) {
+                    if (text) text = result[j].DisplayName + ", " + text;
+                    else text = result[j].DisplayName;
+                  }
+                  state.members[id] = text;
+                  $('[data-id="' + id + '"] [data-type="members"]').text(text);
+                }
+              });
+            } else {
+              members.text(state.members[result.Id]);
+            }
+          })(result.Id, members);
+          tr.append(members);
+          tr.append('<td><a href="/Chat/Open?id=' + result.Id + '" target="_blank">Open</a></td>');
+          rows.push(tr);
+        }
+        $('[data-id="chat-table"]').html(rows);
+      }
+
+      function getStatus() {
+        if (state.isComplete) return;
+        $.get({
+          url: "/Chat/Status?actionId=" + state.currentActionId,
+          success: function (result) {
+            ui_message(result);
+            setTimeout(getStatus, 100);
+          },
+          fail: function (result) {
+            setTimeout(getStatus, 100);
+          }
+        });
+      }
+
+      function getDelta() {
+        if (state.isComplete) return;
+        $.get({
+          url: "/Chat/Delta?actionId=" + state.currentActionId,
+          success: function (result) {
+            for (var i = 0; i < result.length; i++) {
+              state.results.push(result[i]);
+            }
+            setTimeout(getDelta, 500);
+            if (state.isComplete) return;
+            renderChats();
+          },
+          fail: function (result) {
+            setTimeout(getDelta, 500);
+          }
+        });
+      }
+
+      ui_block();
+      getStatus();
+      getDelta();
+
+      $.get({
+        url: "/Chat/ChatList?actionId=" + state.currentActionId,
+        success: function (result) {
+          state.isComplete = true;
+          state.results = result;
+          renderChats();
+          ui_unblock();
+        },
+        fail: function (result) {
+          state.isComplete = true;
+          ui_unblock();
+        },
+      });
+    });
+  </script>
+}

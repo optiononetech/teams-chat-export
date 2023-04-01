@@ -11,106 +11,154 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using System.Web.Mvc;
+using System.Linq;
+using static System.Windows.Forms.AxHost;
 
 namespace teams_export.Controllers
 {
+    [Authorize]
+    [SessionState(System.Web.SessionState.SessionStateBehavior.ReadOnly)]
     public class ChatController : BaseController
     {
-        // GET: Chat
-        [Authorize]
-        public async Task<ActionResult> Index()
+        public ActionResult Index()
         {
-            var chats = await GraphHelper.GetChatsAsync();
-            return View(chats);
+            return View();
         }
 
+        public ActionResult Status(string actionId)
+        {
+            return Json(HttpContext.GetCurrentAction(actionId), JsonRequestBehavior.AllowGet);
+        }
 
-        // GET: Chat
-        [Authorize]
-        public async Task<ActionResult> Export(string id)
+        public ActionResult Delta(string actionId)
+        {
+            return Json(HttpContext.GetDelta(actionId), JsonRequestBehavior.AllowGet);
+        }
+
+        public async Task<ActionResult> ChatList(string actionId)
+        {
+            var chats = await GraphHelper.GetChatsAsync(actionId, HttpContext);
+            return Json(chats, JsonRequestBehavior.AllowGet);
+        }
+
+        public async Task<ActionResult> MemberList(string id)
+        {
+            var members = await GraphHelper.GetChatMembersAsync(id);
+            return Json(members, JsonRequestBehavior.AllowGet);
+        }
+
+        public async Task<ActionResult> Open(string id)
         {
             var chat = await GraphHelper.GetChatAsync(id);
-            var currentPage = await GraphHelper.GetChatMessagesAsync(id);
+            return View(chat);
+        }
 
-            var safeChatId = Hash(id);
+        public async Task<ActionResult> MessageList(string actionId, string chatId, DateTime since, DateTime until)
+        {
+            var hash = Hash(chatId);
+            var dir = Server.MapPath("~/Content/public/" + hash);
+            if (!System.IO.Directory.Exists(dir)) System.IO.Directory.CreateDirectory(dir);
+            var messages = await GraphHelper.GetChatMessagesAsync(chatId, since, until, dir, false, actionId, HttpContext);
+            return Json(messages, JsonRequestBehavior.AllowGet);
+        }
+
+        public async Task<ActionResult> Export(string actionId, string chatId, DateTime since, DateTime until)
+        {
+            var chat = await GraphHelper.GetChatAsync(chatId);
+
+            var safeChatId = Hash(chatId + since.ToString("o") + until.ToString("o"));
             var tempDir = Path.Combine(AppContext.BaseDirectory, "export", "raw", safeChatId);
             if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
             var assetsDir = Path.Combine(tempDir, "assets");
             if (!Directory.Exists(assetsDir)) Directory.CreateDirectory(assetsDir);
             var outputZip = Path.Combine(AppContext.BaseDirectory, "export", $"{safeChatId}.zip");
-            if (!System.IO.File.Exists(outputZip))
+            if (System.IO.File.Exists(outputZip)) System.IO.File.Delete(outputZip);
+            if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
+            var htmlDoc = Path.Combine(tempDir, "index.html");
+            using (var stream = new FileStream(htmlDoc, FileMode.Create))
+            using (var writer = new StreamWriter(stream, Encoding.UTF8, 8192, true))
             {
-                if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
-                var htmlDoc = Path.Combine(tempDir, "index.html");
-                using (var stream = new FileStream(htmlDoc, FileMode.Create))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8, 81920, true))
+                writer.WriteLine("<!doctype HTML>");
+                writer.WriteLine("<html>");
                 {
-                    writer.WriteLine("<!doctype HTML>");
-                    writer.WriteLine("<html>");
+                    writer.WriteLine("<head>");
                     {
-                        writer.WriteLine("<head>");
+                        writer.WriteLine($"<title>{(string.IsNullOrWhiteSpace(chat.Topic) ? "Private Chat" : chat.Topic)}</title>");
+                        writer.WriteLine($"<style>");
                         {
-                            writer.WriteLine($"<title>{id} - {chat.Topic}</title>");
-                            writer.WriteLine($"<style>");
-                            {
-                                writer.WriteLine(
-@"
-    .messages {
-        background-color: rgb(245, 245, 245);
-    }
-
-    .message{
-        background-color: white;
-    }
-    .message, .reply {
-        display: inline-block;
-        padding: 10px;
-        margin: 10px;
-    }
-    .from {
-        font-weight: bold;
-    }
-
-    .date {
-        color: gray;
-    }
-    .reply {
-        background-color: rgb(250, 249, 248);
-        border: 1px solid silver;
-    }
-");
-                            }
-                            writer.WriteLine($"</style>");
+                            writer.WriteLine(System.IO.File.ReadAllText(Server.MapPath("~/Content/bootstrap.min.css")));
                         }
-                        writer.WriteLine("</head>");
-                        writer.WriteLine("<body>");
-                        {
-                            writer.WriteLine("<h2>Members</h2>");
-                            foreach (var member in chat.Members)
-                                writer.WriteLine($"<h4>{member?.DisplayName}</h4>");
+                        writer.WriteLine($"</style>");
+                    }
+                    writer.WriteLine("</head>");
+                    writer.WriteLine("<body>");
+                    {
+                        writer.WriteLine($"<h1>{(string.IsNullOrWhiteSpace(chat.Topic) ? "Private Chat" : chat.Topic)}</h1>");
+                        foreach (var member in chat.Members)
+                            writer.WriteLine($"<span class='btn btn-secondary m-2'>{member?.DisplayName}</span>");
 
-                            writer.WriteLine("<h2>Messages</h2>");
-                            writer.WriteLine("<div class='messages'>");
+                        writer.WriteLine("<div class='messages'>");
+                        {
+                            var messages = await GraphHelper.GetChatMessagesAsync(chatId, since, until, assetsDir, true, actionId, HttpContext);
+
+                            writer.WriteLine("<div class='container'>");
                             {
-                                while (currentPage.Count > 0)
+                                writer.WriteLine("<div class='row'>");
                                 {
-                                    foreach (var message in currentPage)
+                                    writer.WriteLine("<div class='col-12'>");
                                     {
-                                        writer.Write(await BuildHtmlMessage(id, assetsDir, message));
+                                        writer.WriteLine("<div class='card m-1' data-id='message-container'>");
+                                        {
+                                            writer.WriteLine("<div class='card-body'>");
+                                            {
+                                                writer.WriteLine("<div class='container' style='overflow: auto; max-height: calc(100vh - 300px)'>");
+                                                {
+                                                    foreach (var message in messages.AsEnumerable().Reverse())
+                                                    {
+                                                        var fromPrincipal = message.From.User.DisplayName == chat.Members.FirstOrDefault()?.DisplayName;
+                                                        var style = ""; if (fromPrincipal) style = "background-color: rgb(232, 235, 250)";
+                                                        writer.WriteLine("<div class='row m-2'>");
+                                                        {
+                                                            if (fromPrincipal) writer.WriteLine("<div class='col-7'></div>");
+                                                            writer.WriteLine($"<div class='col-5 p-2 shadow'  style='{style}'>");
+                                                            {
+                                                                writer.WriteLine($"<div>");
+                                                                {
+                                                                    writer.WriteLine($"<b>"); writer.WriteLine(message.From.User.DisplayName); writer.WriteLine("</b>");
+                                                                    writer.WriteLine($"<span style='float: right; font-weight: light'>"); writer.WriteLine(message.CreatedDateTime.Value.DateTime.ToLongDateString() + " " + message.CreatedDateTime.Value.DateTime.ToLongTimeString()); writer.WriteLine("</span>");
+                                                                }
+                                                                writer.WriteLine("</div>");
+                                                                writer.WriteLine($"<hr style='margin-top: 0px; margin-bottom: 2px;'/>");
+                                                                writer.WriteLine($"<div>");
+                                                                {
+                                                                    writer.WriteLine(message.Body.Content);
+                                                                }
+                                                                writer.WriteLine("</div>");
+                                                            }
+                                                            writer.WriteLine("</div>");
+                                                        }
+                                                        writer.WriteLine("</div>");
+                                                    }
+                                                }
+                                                writer.WriteLine("</div>");
+                                            }
+                                            writer.WriteLine("</div>");
+                                        }
+                                        writer.WriteLine("</div>");
                                     }
-                                    if (currentPage.NextPageRequest == null)
-                                        break;
-                                    currentPage = await currentPage.NextPageRequest.GetAsync();
+                                    writer.WriteLine("</div>");
                                 }
+                                writer.WriteLine("</div>");
                             }
                             writer.WriteLine("</div>");
                         }
-                        writer.WriteLine("</body>");
+                        writer.WriteLine("</div>");
                     }
-                    writer.WriteLine("</html>");
+                    writer.WriteLine("</body>");
                 }
-                ZipFile.CreateFromDirectory(tempDir, outputZip);
+                writer.WriteLine("</html>");
             }
+            ZipFile.CreateFromDirectory(tempDir, outputZip);
             return File(new FileStream(outputZip, FileMode.Open), "application/zip", Path.GetFileName(outputZip));
         }
 
@@ -196,7 +244,7 @@ namespace teams_export.Controllers
                             }
                             else
                             {
-                                throw new Exception("Unknown file");
+                                messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", $"<a href=\"#404\">*MISSING* {attachment.Name}</a>");
                             }
                         }
                     }
@@ -226,7 +274,7 @@ namespace teams_export.Controllers
 
         public string Hash(string input)
         {
-            using (var hash = SHA256.Create())
+            using (var hash = SHA1.Create())
                 return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(input))).Replace("-", "");
         }
 

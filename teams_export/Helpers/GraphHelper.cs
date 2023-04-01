@@ -15,6 +15,11 @@ using System.Web;
 using System.IO;
 using System.Net.Http;
 using System;
+using System.Security.Cryptography;
+using System.Text;
+using Newtonsoft.Json;
+using System.Web.Helpers;
+using System.Net.Mail;
 
 namespace teams_export.Helpers
 {
@@ -67,27 +72,32 @@ namespace teams_export.Helpers
             return events.CurrentPage;
         }
 
-        public static async Task<IEnumerable<Chat>> GetChatsAsync()
+        public static async Task<IEnumerable<Chat>> GetChatsAsync(string actionId, HttpContextBase session)
         {
             var graphClient = GetAuthenticatedClient();
 
             List<Chat> chats = new List<Chat>();
 
+            session.SetCurrentAction(actionId, "Getting initial chat list");
             var graphChats = await graphClient.Me.Chats.Request()
                 .GetAsync();
 
             while (graphChats.Count > 0)
             {
                 chats.AddRange(graphChats);
-                if (graphChats.NextPageRequest == null)
-                    break;
+                session.SetResult(actionId, chats.ToList());
+                if (graphChats.NextPageRequest == null) break;
+                session.SetCurrentAction(actionId, $"Getting next chat list. Last chat: [{chats.LastOrDefault()?.Topic ?? "Private Chat"}] {chats.LastOrDefault()?.Id}");
                 graphChats = await graphChats.NextPageRequest.GetAsync();
             }
-
-            foreach (var chat in chats)
-                chat.Members = await graphClient.Me.Chats[chat.Id].Members.Request().GetAsync();
-
+            session.SetCurrentAction(actionId, "Done");
             return chats;
+        }
+
+        public static async Task<IEnumerable<ConversationMember>> GetChatMembersAsync(string id)
+        {
+            var graphClient = GetAuthenticatedClient();
+            return await graphClient.Me.Chats[id].Members.Request().GetAsync();
         }
 
         public static async Task<Chat> GetChatAsync(string id)
@@ -104,7 +114,144 @@ namespace teams_export.Helpers
         public static async Task<IChatMessagesCollectionPage> GetChatMessagesAsync(string chatId)
         {
             var graphClient = GetAuthenticatedClient();
-            return await graphClient.Me.Chats[chatId].Messages.Request().GetAsync();
+            var request = graphClient.Me.Chats[chatId].Messages.Request();
+            return await request.GetAsync();
+        }
+
+        public static string Hash(string input)
+        {
+            using (var hash = SHA1.Create())
+                return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(input))).Replace("-", "");
+        }
+
+        public class ChatReply
+        {
+            public string messageId { get; set; }
+            public string messagePreview { get; set; }
+            public IdentitySet messageSender { get; set; }
+        }
+
+        public static async Task<List<ChatMessage>> GetChatMessagesAsync(string chatId, DateTime since, DateTime until, string publicDir, bool staticPath, string actionId, HttpContextBase session)
+        {
+            var graphClient = GetAuthenticatedClient();
+            var request = graphClient.Me.Chats[chatId].Messages.Request();
+            request = request.Filter($"lastModifiedDateTime gt {since:o}Z and lastModifiedDateTime lt {until.Date.AddDays(1).AddSeconds(-1):o}Z").Top(50);
+            session.SetCurrentAction(actionId, "Get initial message list");
+            var currentPage = await request.GetAsync();
+            var messageList = new List<ChatMessage>();
+            while (currentPage.Count > 0)
+            {
+                foreach (var message in currentPage)
+                {
+                    if (message.LastModifiedDateTime.Value.Date >= since)
+                    {
+                        session.SetCurrentAction(actionId, $"Getting next message list. Last message: {message.From?.User?.DisplayName}/{message.LastModifiedDateTime}");
+                        messageList.Add(await DownloadChatMessage(chatId, message, publicDir, staticPath));
+                    }
+                    else
+                        break;
+                }
+                session.SetResult(actionId, messageList);
+                if (currentPage.NextPageRequest == null) break;
+                currentPage = await currentPage.NextPageRequest.GetAsync();
+            }
+            session.SetCurrentAction(actionId, "Done");
+            return messageList;
+        }
+
+        private static async Task<ChatMessage> DownloadChatMessage(string chatId, ChatMessage message, string publicDir, bool staticPath)
+        {
+            var messageContent = message.Body.Content;
+            if (messageContent.Contains($"https://graph.microsoft.com/v1.0/chats/{chatId}/messages/{message.Id}/hostedContents"))
+            {
+                foreach (var item in await GetChatMessageHostedContentsAsync(chatId, message.Id))
+                {
+                    var content = await GetChatMessageHostedContentsAsync(chatId, message.Id, item.Id);
+
+                    var currentContentTag = messageContent.Substring(0, messageContent.IndexOf($"https://graph.microsoft.com/v1.0/chats/{chatId}/messages/{message.Id}/hostedContents/{item.Id}"));
+                    currentContentTag = currentContentTag.Substring(currentContentTag.LastIndexOf("<") + 1);
+                    currentContentTag = currentContentTag.Substring(0, currentContentTag.IndexOf(" "));
+
+                    var ext = "";
+                    switch (currentContentTag)
+                    {
+                        case "img": ext = ".jpg"; break;
+                        default: throw new Exception("Unknown tag");
+                    }
+
+                    var safeContentId = Hash(item.Id) + ext;
+                    if (!System.IO.File.Exists(Path.Combine(publicDir, safeContentId)))
+                    {
+                        using (var contentStream = new FileStream(Path.Combine(publicDir, safeContentId), FileMode.Create))
+                            await content.CopyToAsync(contentStream);
+                    }
+                    if (staticPath)
+                    {
+                        messageContent = messageContent.Replace($"https://graph.microsoft.com/v1.0/chats/{chatId}/messages/{message.Id}/hostedContents/{item.Id}/$value", $"assets/{safeContentId}");
+                    }
+                    else
+                    {
+                        var chatIdHash = Hash(chatId);
+                        messageContent = messageContent.Replace($"https://graph.microsoft.com/v1.0/chats/{chatId}/messages/{message.Id}/hostedContents/{item.Id}/$value", $"/public?chatId={chatIdHash}&fileName={safeContentId}&downloadName={safeContentId}");
+                    }
+                }
+            }
+
+            foreach (var attachment in message.Attachments)
+            {
+                if (attachment.ContentType == "messageReference")
+                {
+                    var reply = JsonConvert.DeserializeObject<ChatReply>(attachment.Content);
+                    var replyMessage = await GetChatMessageAsync(chatId, reply.messageId);
+                    var processedReply = await DownloadChatMessage(chatId, replyMessage, publicDir, staticPath);
+                    messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", processedReply.Body.Content);
+                }
+                else if (!string.IsNullOrEmpty(attachment.ContentUrl))
+                {
+                    var content = await DownloadAttachmentAsync(message, attachment);
+                    if (content != null)
+                    {
+                        var safeContentId = Hash(attachment.Id) + "_" + attachment.Name;
+                        if (!System.IO.File.Exists(Path.Combine(publicDir, safeContentId)))
+                        {
+                            using (var contentStream = new FileStream(Path.Combine(publicDir, safeContentId), FileMode.Create))
+                                await content.CopyToAsync(contentStream);
+                        }
+
+                        string mimeType = MimeMapping.GetMimeMapping(attachment.Name);
+                        if (mimeType.StartsWith("image"))
+                        {
+                            if (staticPath)
+                            {
+                                messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", $"<a href=\"assets/{safeContentId}\"><img style='width: 100%' src=\"assets/{safeContentId}\" />{attachment.Name}</a>");
+                            }
+                            else
+                            {
+                                var chatIdHash = Hash(chatId);
+                                messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", $"<a href=\"/public?chatId={chatIdHash}&fileName={safeContentId}&downloadName={attachment.Name}\"><img style='width: 100%' src=\"/public?chatId={chatIdHash}&fileName={safeContentId}&downloadName={attachment.Name}\" />{attachment.Name}</a>");
+                            }
+                        }
+                        else
+                        {
+                            if (staticPath)
+                            {
+                                messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", $"<a href=\"assets/{safeContentId}\">{attachment.Name}</a>");
+                            }
+                            else
+                            {
+                                var chatIdHash = Hash(chatId);
+                                messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", $"<a href=\"/public?chatId={chatIdHash}&fileName={safeContentId}&downloadName={attachment.Name}\">{attachment.Name}</a>");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        messageContent = messageContent.Replace($"<attachment id=\"{attachment.Id}\"></attachment>", $"<a href=\"#404\">*MISSING* {attachment.Name}</a>");
+                    }
+                }
+            }
+            message.Body.Content = messageContent;
+            return message;
         }
 
         public static async Task<ChatMessage> GetChatMessageAsync(string chatId, string messageId)

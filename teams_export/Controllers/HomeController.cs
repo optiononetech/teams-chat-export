@@ -13,7 +13,7 @@ namespace teams_export.Controllers
     {
         public ActionResult Index()
         {
-            return View();
+            return RedirectToAction("Index", "Chat");
         }
 
         public ActionResult About()

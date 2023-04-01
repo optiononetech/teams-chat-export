@@ -202,7 +202,9 @@
     <Compile Include="Controllers\BaseController.cs" />
     <Compile Include="Controllers\ChatController.cs" />
     <Compile Include="Controllers\CalendarController.cs" />
+    <Compile Include="Controllers\PublicController.cs" />
     <Compile Include="Controllers\HomeController.cs" />
+    <Compile Include="Extensions\SessionExtensions.cs" />
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
@@ -355,6 +357,7 @@
     <Content Include="Scripts\popper-utils.js.map" />
     <Content Include="Views\Calendar\Index.cshtml" />
     <Content Include="Views\Chat\Index.cshtml" />
+    <Content Include="Views\Chat\Open.cshtml" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="App_Data\" />
@@ -394,13 +397,13 @@
           <AutoAssignPort>True</AutoAssignPort>
           <DevelopmentServerPort>52116</DevelopmentServerPort>
           <DevelopmentServerVPath>/</DevelopmentServerVPath>
-          <IISUrl>http://localhost:52116/</IISUrl>
+          <IISUrl>https://localhost:44375/</IISUrl>
           <NTLMAuthentication>False</NTLMAuthentication>
           <UseCustomServer>False</UseCustomServer>
           <CustomServerUrl>
           </CustomServerUrl>
           <SaveServerSettingsInUserFile>False</SaveServerSettingsInUserFile>
-          <servers defaultServer="SelfHostServer">
+          <servers defaultServer="">
             <server name="SelfHostServer" exePath="" cmdArgs="" url="http://localhost:52116/" workingDir="" />
           </servers>
         </WebProjectProperties>
